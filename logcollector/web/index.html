@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>logcollector · 日志采集控制台</title>
+<style>
+/* palette: dataviz reference instance, light + selected dark */
+.viz-root {
+  color-scheme: light;
+  --surface-1: #fcfcfb; --page: #f9f9f7;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
+  --gridline: #e1e0d9; --baseline: #c3c2b7;
+  --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --seq-100: #cde2fb;
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  --success-text: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-1: #1a1a19; --page: #0d0d0d;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+    --gridline: #2c2c2a; --baseline: #383835;
+    --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --seq-100: #184f95;
+    --success-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --surface-1: #1a1a19; --page: #0d0d0d;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
+  --gridline: #2c2c2a; --baseline: #383835;
+  --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --seq-100: #184f95;
+  --success-text: #0ca30c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); }
+.viz-root {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--text-primary); max-width: 1180px; margin: 0 auto;
+  padding: 20px 24px 60px;
+}
+main.refreshing { opacity: .55; transition: opacity .15s; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; }
+h1 .sub { color: var(--text-secondary); font-weight: 400; font-size: 14px; }
+h2 { font-size: 15px; margin: 0; }
+.filter-row {
+  display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+  margin: 14px 0 18px; padding: 10px 12px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 13px; color: var(--text-secondary);
+}
+select, button {
+  font: inherit; color: var(--text-primary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+}
+button { cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.tile .label { font-size: 12px; color: var(--text-secondary); }
+.tile .value { font-size: 30px; font-weight: 600; margin-top: 2px; }
+.tile .delta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; margin-bottom: 16px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.seg button { border-radius: 0; padding: 3px 10px; font-size: 12px; color: var(--text-secondary); }
+.seg button:first-child { border-radius: 6px 0 0 6px; }
+.seg button:last-child { border-radius: 0 6px 6px 0; border-left: none; }
+.seg button.on { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.legend { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; flex-wrap: wrap; }
+.legend .key { display: inline-flex; align-items: center; gap: 6px; }
+.legend .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--text-secondary); font-size: 12px; }
+th, td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--gridline); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.meter { width: 110px; height: 8px; background: var(--seq-100); border-radius: 4px; overflow: hidden; display: inline-block; vertical-align: middle; }
+.meter > i { display: block; height: 100%; background: var(--series-1); border-radius: 4px; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-primary); }
+.badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+.flag { font-size: 11px; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; margin-left: 4px; white-space: nowrap; }
+.tip {
+  position: absolute; pointer-events: none; z-index: 5; max-width: 340px;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: 6px;
+  padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+}
+.tip .t-strong { font-weight: 600; }
+.tip .t-row { display: flex; gap: 6px; align-items: baseline; margin-top: 3px; }
+.tip .t-key { width: 10px; height: 2px; display: inline-block; flex: none; }
+.tip .t-muted { color: var(--muted); }
+#tl-wrap { position: relative; }
+details summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; }
+details pre {
+  margin: 6px 0 0; padding: 8px; background: var(--page); border-radius: 6px;
+  overflow-x: auto; font-size: 12px; line-height: 1.5;
+}
+.diff-rec { color: var(--success-text); font-weight: 600; }
+.diff-fail { color: var(--critical); font-weight: 600; }
+.empty { color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center; }
+footer { color: var(--muted); font-size: 12px; margin-top: 8px; }
+a { color: var(--series-1); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <h1>logcollector <span class="sub">日志采集控制台</span></h1>
+  </header>
+
+  <div class="filter-row">
+    <label>来源 <select id="f-source"><option value="">全部</option></select></label>
+    <label>级别 <select id="f-level">
+      <option value="">全部</option><option>ERROR</option><option>WARN</option>
+      <option>INFO</option><option>DEBUG</option>
+    </select></label>
+    <label><input type="checkbox" id="f-auto" checked> 自动刷新</label>
+    <button id="b-poll">立即采集</button>
+    <button id="b-flush" title="强制闭合所有未闭合事件">闭合未闭合事件</button>
+    <button id="b-replay" class="primary">回放解析失败记录</button>
+    <button id="b-apply" disabled>应用回放结果</button>
+    <span style="flex:1"></span>
+    <button id="b-theme" title="切换明暗主题">◐ 主题</button>
+  </div>
+
+  <main id="main">
+    <section class="kpis" id="kpis"></section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>事件时间线（UTC 归一化）</h2>
+        <div class="seg" id="tl-seg">
+          <button data-view="chart" class="on">散点图</button><button data-view="table">表格视图</button>
+        </div>
+      </div>
+      <div class="legend" id="tl-legend"></div>
+      <div id="tl-wrap">
+        <svg id="tl" role="img" aria-label="事件时间线散点图"></svg>
+        <div id="tl-tip" class="tip" hidden></div>
+      </div>
+      <div id="tl-table-wrap" hidden>
+        <table id="tl-table"><thead><tr>
+          <th>时间 (UTC)</th><th>级别</th><th>来源</th><th>行号</th><th>消息</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>文件偏移</h2></div>
+      <table id="files"><thead><tr>
+        <th>文件</th><th class="num">代</th><th class="num">inode</th>
+        <th class="num">偏移 (字节)</th><th class="num">大小</th><th>读取进度</th>
+        <th class="num">已读行</th><th class="num">残行字节</th><th>未闭合事件</th><th>状态</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>解析错误（死信队列，可回放）</h2></div>
+      <table id="errors"><thead><tr>
+        <th>原因</th><th>来源</th><th>行号</th><th class="num">偏移</th>
+        <th>详情</th><th>状态</th><th>原始行</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section class="card" id="card-replay" hidden>
+      <div class="card-head"><h2>重放差异</h2><span class="mono" id="replay-meta"></span></div>
+      <div id="replay-summary" style="margin-bottom:10px;font-size:13px"></div>
+      <table id="replay"><thead><tr>
+        <th>错误</th><th>来源</th><th>行号</th><th>原失败原因</th><th>重放结果</th><th>恢复的事件</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>事件列表</h2><span class="mono" id="events-count"></span></div>
+      <table id="events"><thead><tr>
+        <th>时间 (UTC)</th><th>原始时间戳</th><th>级别</th><th>来源</th>
+        <th>行号</th><th class="num">偏移</th><th>类型</th><th>消息</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <footer id="foot"></footer>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const LEVELS = {
+  ERROR: {color: "var(--critical)", icon: "✕", label: "错误"},
+  WARN:  {color: "var(--warning)",  icon: "⚠", label: "警告"},
+  INFO:  {color: "var(--series-1)", icon: "●", label: "信息"},
+  OTHER: {color: "var(--muted)",    icon: "○", label: "其他"},
+};
+const levelOf = (lv) => LEVELS[lv] || LEVELS.OTHER;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = text;
+  return n;
+}
+const fmtInt = (n) => (n ?? 0).toLocaleString("en-US");
+function fmtUTC(ms) {
+  if (ms == null) return "—";
+  const d = new Date(ms);
+  const p = (x, n=2) => String(x).padStart(n, "0");
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())} ` +
+         `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
+function fmtTick(ms, spanMs) {
+  const d = new Date(ms);
+  const p = (x) => String(x).padStart(2, "0");
+  const hm = `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  if (spanMs < 3600e3) return `${hm}:${p(d.getUTCSeconds())}`;
+  if (spanMs < 86400e3 * 2) return hm;
+  return `${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())} ${hm}`;
+}
+
+const state = {status: null, events: [], errors: [], replay: null,
+               timelineView: "chart", lastReplayOverrides: {json_strict: false}};
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(path + " -> " + r.status);
+  return r.json();
+}
+async function postJSON(path, body) {
+  return api(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify(body || {})});
+}
+
+async function refresh() {
+  const main = $("main");
+  main.classList.add("refreshing");
+  try {
+    const src = $("f-source").value, lv = $("f-level").value;
+    const q = new URLSearchParams(); if (src) q.set("source", src); if (lv) q.set("level", lv);
+    const [st, ev, er, rp] = await Promise.all([
+      api("/api/status"), api("/api/events?" + q), api("/api/errors"), api("/api/replay")]);
+    state.status = st; state.events = ev.events; state.errors = er.errors;
+    if (rp.replay) state.replay = rp.replay;
+    renderAll();
+  } catch (e) { console.error(e); }
+  main.classList.remove("refreshing");
+}
+
+/* ---------------- KPI tiles ---------------- */
+function renderKpis() {
+  const st = state.status;
+  const open = st.files.filter(f => f.open_event).length;
+  const tiles = [
+    ["事件总数", fmtInt(st.events_total), `本轮显示 ${fmtInt(state.events.length)}`],
+    ["未解决解析错误", fmtInt(st.errors_unresolved), `累计 ${fmtInt(st.errors_total)}`],
+    ["未闭合事件", fmtInt(open), "跨批次/重启后继续拼接"],
+    ["监视文件", fmtInt(st.files.length), st.files.some(f=>f.missing) ? "有文件缺失" : "全部可读写"],
+    ["采集轮次", fmtInt(st.poll_count), st.last_poll_ms ? "最近 " + fmtUTC(st.last_poll_ms) : "尚未采集"],
+  ];
+  const box = $("kpis"); box.textContent = "";
+  for (const [label, value, delta] of tiles) {
+    const t = el("div", "tile");
+    t.append(el("div", "label", label), el("div", "value", value), el("div", "delta", delta));
+    box.append(t);
+  }
+}
+
+/* ---------------- timeline scatter ---------------- */
+const TL = {ml: 150, mr: 16, mt: 8, mb: 28, laneH: 34};
+let tlPoints = [];
+
+function renderTimeline() {
+  const svg = $("tl"), wrap = $("tl-wrap");
+  svg.textContent = "";
+  tlPoints = [];
+  const evs = state.events.filter(e => e.ts_utc != null);
+  const width = Math.max(wrap.clientWidth || 900, 320);
+  const sources = [...new Set(evs.map(e => e.source))].sort();
+  const laneOf = new Map(sources.map((s, i) => [s, i]));
+  const height = TL.mt + sources.length * TL.laneH + TL.mb;
+  svg.setAttribute("width", width); svg.setAttribute("height", height);
+  svg.style.display = "block";
+
+  if (!evs.length) {
+    const t = el("text"); t.setAttribute("x", width/2); t.setAttribute("y", height/2);
+    t.setAttribute("text-anchor", "middle"); t.setAttribute("fill", "var(--muted)");
+    t.setAttribute("font-size", "13"); t.textContent = "暂无事件";
+    svg.append(t); return;
+  }
+  let t0 = Math.min(...evs.map(e => e.ts_utc)), t1 = Math.max(...evs.map(e => e.ts_utc));
+  if (t0 === t1) { t0 -= 60e3; t1 += 60e3; }
+  const pad = (t1 - t0) * 0.03; t0 -= pad; t1 += pad;
+  const X = (ms) => TL.ml + (ms - t0) / (t1 - t0) * (width - TL.ml - TL.mr);
+  const Y = (src) => TL.mt + laneOf.get(src) * TL.laneH + TL.laneH / 2;
+  const ns = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs) => { const n = document.createElementNS(ns, tag);
+    for (const k in attrs) n.setAttribute(k, attrs[k]); return n; };
+
+  // vertical gridlines + x ticks (recessive hairlines)
+  const span = t1 - t0, nTicks = 6;
+  for (let i = 0; i <= nTicks; i++) {
+    const ms = t0 + span * i / nTicks, x = X(ms);
+    svg.append(mk("line", {x1: x, y1: TL.mt, x2: x, y2: height - TL.mb,
+                           stroke: "var(--gridline)", "stroke-width": 1}));
+    const lab = mk("text", {x, y: height - TL.mb + 16, "text-anchor": "middle",
+                            fill: "var(--muted)", "font-size": 11});
+    lab.textContent = fmtTick(ms, span); svg.append(lab);
+  }
+  // lane separators + labels
+  sources.forEach((s, i) => {
+    const y = TL.mt + i * TL.laneH;
+    svg.append(mk("line", {x1: TL.ml, y1: y, x2: width - TL.mr, y2: y,
+                           stroke: "var(--gridline)", "stroke-width": 1}));
+    const lab = mk("text", {x: TL.ml - 8, y: y + TL.laneH/2 + 4, "text-anchor": "end",
+                            fill: "var(--text-secondary)", "font-size": 11});
+    lab.textContent = s.length > 24 ? "…" + s.slice(-23) : s;
+    lab.setAttribute("class", "mono"); svg.append(lab);
+  });
+  // baseline
+  svg.append(mk("line", {x1: TL.ml, y1: height - TL.mb, x2: width - TL.mr,
+                         y2: height - TL.mb, stroke: "var(--baseline)", "stroke-width": 1}));
+  // crosshair
+  const cross = mk("line", {y1: TL.mt, y2: height - TL.mb, stroke: "var(--muted)",
+                            "stroke-width": 1, visibility: "hidden"});
+  svg.append(cross);
+
+  // dots: r=4 (8px) with 2px surface ring
+  for (const e of evs) {
+    const lv = levelOf(e.level);
+    const c = mk("circle", {cx: X(e.ts_utc), cy: Y(e.source), r: 4, fill: lv.color,
+                            stroke: "var(--surface-1)", "stroke-width": 2,
+                            tabindex: 0, role: "img"});
+    c.setAttribute("aria-label", `${fmtUTC(e.ts_utc)} ${e.level || "OTHER"} ${e.source}`);
+    const pt = {x: X(e.ts_utc), y: Y(e.source), ev: e, node: c};
+    c.addEventListener("focus", () => showTip(pt));
+    c.addEventListener("blur", hideTip);
+    svg.append(c); tlPoints.push(pt);
+  }
+
+  svg.onpointermove = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    let best = null, bd = 24;  // 24px hit target around nearest point
+    for (const p of tlPoints) {
+      const d = Math.hypot(p.x - mx, p.y - my);
+      if (d < bd) { bd = d; best = p; }
+    }
+    if (best) showTip(best, cross); else { hideTip(); cross.setAttribute("visibility", "hidden"); }
+  };
+  svg.onpointerleave = () => { hideTip(); cross.setAttribute("visibility", "hidden"); };
+
+  function showTip(p, crosshair) {
+    if (crosshair) { crosshair.setAttribute("x1", p.x); crosshair.setAttribute("x2", p.x);
+                     crosshair.setAttribute("visibility", "visible"); }
+    const tip = $("tl-tip"); tip.textContent = "";
+    const e = p.ev, lv = levelOf(e.level);
+    tip.append(el("div", "t-strong", fmtUTC(e.ts_utc) + " UTC"));
+    const row = el("div", "t-row");
+    const key = el("span", "t-key"); key.style.background = lv.color;
+    row.append(key, el("span", null, `${lv.icon} ${e.level || "无级别"} · ${e.kind}`));
+    tip.append(row);
+    tip.append(el("div", "t-row t-muted",
+      `${e.source} 第${e.start_line}-${e.end_line}行 · 偏移 ${fmtInt(e.start_offset)}`));
+    if (e.ts_raw) tip.append(el("div", "t-row t-muted", `原始时间戳: ${e.ts_raw}${e.tz_assumed ? "（时区为假定）" : ""}`));
+    tip.append(el("div", "t-row", (e.message || "").slice(0, 160)));
+    tip.hidden = false;
+    const wr = wrap.getBoundingClientRect();
+    tip.style.left = Math.max(0, Math.min(p.x + 14, wr.width - 350)) + "px";
+    tip.style.top = Math.max(p.y - 10, 0) + "px";
+  }
+  function hideTip() { $("tl-tip").hidden = true; }
+
+  // table twin
+  const tb = $("tl-table").querySelector("tbody"); tb.textContent = "";
+  for (const e of evs) {
+    const tr = el("tr");
+    tr.append(el("td", "mono", fmtUTC(e.ts_utc)), tdLevel(e),
+              el("td", "mono", e.source),
+              el("td", "mono", `${e.start_line}-${e.end_line}`),
+              el("td", null, (e.message || "").slice(0, 120)));
+    tb.append(tr);
+  }
+}
+
+function tdLevel(e) {
+  const lv = levelOf(e.level), td = el("td");
+  const b = el("span", "badge");
+  const d = el("span", "dot"); d.style.background = lv.color;
+  b.append(d, el("span", null, `${lv.icon} ${e.level || "—"}`));
+  td.append(b); return td;
+}
+
+function renderLegend() {
+  const lg = $("tl-legend"); lg.textContent = "";
+  for (const [k, lv] of Object.entries(LEVELS)) {
+    const item = el("span", "key");
+    const dot = el("span", "dot"); dot.style.background = lv.color;
+    item.append(dot, el("span", null, `${lv.icon} ${lv.label}${k==="OTHER"?"（无级别）":""}`));
+    lg.append(item);
+  }
+}
+
+/* ---------------- files / offsets ---------------- */
+function renderFiles() {
+  const tb = $("files").querySelector("tbody"); tb.textContent = "";
+  for (const f of state.status.files) {
+    const tr = el("tr");
+    tr.append(el("td", "mono", f.path));
+    tr.append(el("td", "num", f.generation ?? "—"));
+    tr.append(el("td", "num mono", f.inode ?? "—"));
+    tr.append(el("td", "num mono", fmtInt(f.offset)));
+    tr.append(el("td", "num mono", f.size == null ? "—" : fmtInt(f.size)));
+    const pct = f.size ? Math.min(100, f.offset / f.size * 100) : 0;
+    const mtd = el("td");
+    const meter = el("span", "meter");
+    const fill = el("i"); fill.style.width = pct.toFixed(1) + "%";
+    meter.append(fill);
+    mtd.append(meter, el("span", null, " " + pct.toFixed(0) + "%"));
+    tr.append(mtd);
+    tr.append(el("td", "num", fmtInt(f.lines_read)));
+    tr.append(el("td", "num", fmtInt(f.partial_bytes)));
+    const otd = el("td");
+    if (f.open_event) {
+      otd.append(el("span", null, `${f.open_event.lines} 行 · 自第 ${f.open_event.since_line} 行`));
+      const pv = el("div", "mono"); pv.style.color = "var(--muted)";
+      pv.textContent = (f.open_event.preview || "").slice(0, 60);
+      otd.append(pv);
+    } else otd.append(el("span", null, "—"));
+    tr.append(otd);
+    tr.append(el("td", null, f.missing ? "缺失" : "正常"));
+    tb.append(tr);
+  }
+}
+
+/* ---------------- errors ---------------- */
+function renderErrors() {
+  const tb = $("errors").querySelector("tbody"); tb.textContent = "";
+  if (!state.errors.length) {
+    const tr = el("tr"), td = el("td", "empty", "没有解析错误");
+    td.colSpan = 7; tr.append(td); tb.append(tr); return;
+  }
+  for (const e of state.errors) {
+    const tr = el("tr");
+    tr.append(el("td", "mono", e.reason));
+    tr.append(el("td", "mono", `${e.source} (代${e.generation})`));
+    tr.append(el("td", "mono", `${e.start_line}-${e.end_line}`));
+    tr.append(el("td", "num mono", fmtInt(e.start_offset)));
+    tr.append(el("td", null, (e.detail || "").slice(0, 90)));
+    const std = el("td");
+    std.append(el("span", e.resolved ? "diff-rec" : "diff-fail",
+                  e.resolved ? "✓ 已恢复" : "✕ 未解决"));
+    tr.append(std);
+    const dtd = el("td");
+    const det = el("details");
+    det.append(el("summary", null, `${e.lines.length} 行`));
+    const pre = el("pre");
+    pre.textContent = e.lines.map(l =>
+      `${String(l.line_no).padStart(5)} | ${l.text}${l.truncated ? " …[截断]" : ""}${l.partial ? " …[残行]" : ""}`
+    ).join("\n");
+    det.append(pre); dtd.append(det); tr.append(dtd);
+    tb.append(tr);
+  }
+}
+
+/* ---------------- replay diff ---------------- */
+function renderReplay() {
+  const rp = state.replay;
+  $("card-replay").hidden = !rp;
+  if (!rp) return;
+  $("replay-meta").textContent =
+    `${rp.replay_id} · ${fmtUTC(rp.ran_ms)} · 覆盖配置 ${JSON.stringify(rp.config_overrides)}`;
+  const s = $("replay-summary"); s.textContent = "";
+  s.append(el("span", null, `共 ${rp.total} 条死信：`),
+           el("span", "diff-rec", ` ✓ 恢复 ${rp.recovered} `),
+           el("span", "diff-fail", ` ✕ 仍失败 ${rp.still_failing}`));
+  const tb = $("replay").querySelector("tbody"); tb.textContent = "";
+  for (const r of rp.results) {
+    const tr = el("tr");
+    tr.append(el("td", "mono", r.error_id.slice(0, 10) + "…"));
+    tr.append(el("td", "mono", r.source));
+    tr.append(el("td", "mono", `${r.line_span[0]}-${r.line_span[1]}`));
+    tr.append(el("td", null, `${r.original_reason}: ${(r.original_detail||"").slice(0,60)}`));
+    const std = el("td");
+    if (r.status === "recovered") std.append(el("span", "diff-rec", "✓ 恢复"));
+    else std.append(el("span", "diff-fail",
+      `✕ 仍失败${r.new_errors.length ? "（" + r.new_errors[0].reason + "）" : ""}`));
+    tr.append(std);
+    const etd = el("td");
+    for (const ev of r.recovered_events) {
+      etd.append(el("div", "mono",
+        `${ev.kind} 第${ev.start_line}-${ev.end_line}行 ${ev.json_salvaged ? "[修复]" : ""} ${ev.message.slice(0,50)}`));
+    }
+    if (!r.recovered_events.length) etd.textContent = "—";
+    tr.append(etd);
+    tb.append(tr);
+  }
+  $("b-apply").disabled = !(rp.recovered > 0);
+}
+
+/* ---------------- events table ---------------- */
+function renderEvents() {
+  const evs = [...state.events].reverse();  // newest first
+  $("events-count").textContent = `${fmtInt(evs.length)} 条`;
+  const tb = $("events").querySelector("tbody"); tb.textContent = "";
+  for (const e of evs.slice(0, 300)) {
+    const tr = el("tr");
+    tr.append(el("td", "mono", fmtUTC(e.ts_utc)));
+    const raw = el("td", "mono", e.ts_raw || "（采集时间）");
+    if (e.tz_assumed) raw.append(el("span", "flag", "时区假定"));
+    tr.append(raw);
+    tr.append(tdLevel(e));
+    tr.append(el("td", "mono", `${e.source} (代${e.generation})`));
+    tr.append(el("td", "mono", e.start_line === e.end_line ?
+      `${e.start_line}` : `${e.start_line}-${e.end_line}`));
+    tr.append(el("td", "num mono", fmtInt(e.start_offset)));
+    const ktd = el("td", null, e.kind);
+    if (e.has_stack) ktd.append(el("span", "flag", "堆栈"));
+    if (e.truncated) ktd.append(el("span", "flag", "截断"));
+    if (e.partial) ktd.append(el("span", "flag", "残行"));
+    if (e.incomplete) ktd.append(el("span", "flag", "未闭合已冲刷"));
+    if (e.json_salvaged) ktd.append(el("span", "flag", "JSON修复"));
+    tr.append(ktd);
+    tr.append(el("td", null, (e.message || "").slice(0, 140)));
+    tb.append(tr);
+  }
+}
+
+function renderSourceFilter() {
+  const sel = $("f-source"), cur = sel.value;
+  const sources = [...new Set(state.status.files.map(f => f.path))].sort();
+  sel.textContent = "";
+  sel.append(el("option", null, "全部")); sel.lastChild.value = "";
+  for (const s of sources) { const o = el("option", null, s); o.value = s; sel.append(o); }
+  sel.value = cur;
+}
+
+function renderAll() {
+  renderSourceFilter();
+  renderKpis();
+  renderLegend();
+  renderTimeline();
+  renderFiles();
+  renderErrors();
+  renderReplay();
+  renderEvents();
+  const st = state.status, c = st.config;
+  $("foot").textContent =
+    `严格 JSON: ${c.json_strict ? "开" : "关"} · 默认时区: ${c.default_tz} · ` +
+    `行上限 ${c.max_line_bytes} 字节 · 事件行数上限 ${c.max_event_lines} · JSON 行数上限 ${c.max_json_lines}`;
+}
+
+/* ---------------- wiring ---------------- */
+$("f-source").addEventListener("change", refresh);
+$("f-level").addEventListener("change", refresh);
+$("b-poll").addEventListener("click", async () => { await postJSON("/api/poll"); await refresh(); });
+$("b-flush").addEventListener("click", async () => { await postJSON("/api/flush"); await refresh(); });
+$("b-replay").addEventListener("click", async () => {
+  await postJSON("/api/replay", {apply: false, overrides: state.lastReplayOverrides});
+  await refresh();
+});
+$("b-apply").addEventListener("click", async () => {
+  await postJSON("/api/replay", {apply: true, overrides: state.lastReplayOverrides});
+  await refresh();
+});
+$("tl-seg").addEventListener("click", (ev) => {
+  const v = ev.target.dataset && ev.target.dataset.view;
+  if (!v) return;
+  state.timelineView = v;
+  for (const b of $("tl-seg").querySelectorAll("button"))
+    b.classList.toggle("on", b.dataset.view === v);
+  $("tl-wrap").hidden = v !== "chart";
+  $("tl-table-wrap").hidden = v !== "table";
+});
+$("b-theme").addEventListener("click", () => {
+  const cur = document.documentElement.dataset.theme;
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  localStorage.setItem("lc-theme", next);
+});
+const saved = localStorage.getItem("lc-theme");
+if (saved) document.documentElement.dataset.theme = saved;
+
+let timer = null;
+$("f-auto").addEventListener("change", (ev) => {
+  if (ev.target.checked) timer = setInterval(refresh, 2000);
+  else clearInterval(timer);
+});
+timer = setInterval(refresh, 2000);
+window.addEventListener("resize", () => { if (state.status) renderTimeline(); });
+refresh();
+</script>
+</body>
+</html>
